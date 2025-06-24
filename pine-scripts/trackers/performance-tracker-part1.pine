@@ -1,0 +1,146 @@
+//@version=5
+indicator("Divergence Performance Tracker v1.0 - Part 1", shorttitle="Div Tracker P1", overlay=false, max_bars_back=1000, max_lines_count=500, max_labels_count=500)
+
+// ================================
+// 🎯 DIVERGENCE PERFORMANCE TRACKER v1.0 - PART 1
+// Real-time performance tracking for divergence signals
+// INPUTS & CORE FUNCTIONS
+// ================================
+
+// === INPUTS & SETTINGS ===
+
+// CONNECTION TO MAIN INDICATOR  
+group_connection = "🔗 CONNECTION TO MAIN INDICATOR"
+bullish_regular_source = input.source(close, "Bullish Regular Divergence Signal", group=group_connection)
+bearish_regular_source = input.source(close, "Bearish Regular Divergence Signal", group=group_connection)
+signal_strength_source = input.source(close, "Signal Strength", group=group_connection)
+bb1_upper_source = input.source(close, "BB1 Upper", group=group_connection)
+bb1_lower_source = input.source(close, "BB1 Lower", group=group_connection)
+bb2_upper_source = input.source(close, "BB2 Upper", group=group_connection)  
+bb2_lower_source = input.source(close, "BB2 Lower", group=group_connection)
+rsi_source = input.source(close, "RSI Value", group=group_connection)
+
+// TRACKER SETTINGS
+group_tracker = "⚙️ TRACKER SETTINGS"
+tracking_period = input.int(200, "Tracking Period (bars back)", minval=50, maxval=1000, group=group_tracker)
+min_signal_strength = input.int(1, "Minimum Signal Strength", minval=1, maxval=10, group=group_tracker)
+max_active_signals = input.int(10, "Maximum Active Signals", minval=5, maxval=20, group=group_tracker)
+
+// TARGET SETTINGS  
+group_targets = "🎯 TARGET SETTINGS"
+bb1_distance_pct = input.float(2.5, "BB1 Target Distance %", minval=1.0, maxval=10.0, step=0.1, group=group_targets)
+bb2_distance_pct = input.float(5.0, "BB2 Target Distance %", minval=2.0, maxval=15.0, step=0.1, group=group_targets)
+target3_extension_pct = input.float(7.5, "Target 3 Extension %", minval=3.0, maxval=20.0, step=0.1, group=group_targets)
+target_timeout_bars = input.int(100, "Target Timeout (bars)", minval=20, maxval=500, group=group_targets)
+
+// DISPLAY SETTINGS
+group_display = "🎨 DISPLAY SETTINGS"
+show_performance_table = input.bool(true, "Show Performance Table", group=group_display)
+show_active_signals_table = input.bool(true, "Show Active Signals Table", group=group_display)
+
+// === SIGNAL DETECTION ===
+
+// Signal detection
+bullish_signal_detected = bullish_regular_source > bullish_regular_source[1]
+bearish_signal_detected = bearish_regular_source > bearish_regular_source[1]
+
+// === CORE ARRAYS ===
+
+// Arrays for signal tracking
+var array<int> signal_ids = array.new<int>()
+var array<int> signal_bars = array.new<int>()
+var array<string> signal_types = array.new<string>()
+var array<float> entry_prices = array.new<float>()
+var array<float> target1_prices = array.new<float>()
+var array<float> target2_prices = array.new<float>()
+var array<float> target3_prices = array.new<float>()
+var array<bool> target1_hit = array.new<bool>()
+var array<bool> target2_hit = array.new<bool>()
+var array<bool> target3_hit = array.new<bool>()
+var array<bool> signal_completed = array.new<bool>()
+var array<float> signal_pnl = array.new<float>()
+
+var int signal_counter = 0
+
+// === CORE FUNCTIONS ===
+
+// Function for target calculation
+calculate_targets(signal_type, entry_price, bb1_upper, bb1_lower, bb2_upper, bb2_lower) =>
+    var float target1 = na
+    var float target2 = na  
+    var float target3 = na
+    var float stop_loss = na
+    
+    if signal_type == "bullish"
+        target1 := entry_price + (entry_price * bb1_distance_pct / 100)
+        target2 := entry_price + (entry_price * bb2_distance_pct / 100)
+        target3 := entry_price + (entry_price * target3_extension_pct / 100)
+        stop_loss := entry_price - (entry_price * 2.0 / 100)
+    else
+        target1 := entry_price - (entry_price * bb1_distance_pct / 100)
+        target2 := entry_price - (entry_price * bb2_distance_pct / 100)
+        target3 := entry_price - (entry_price * target3_extension_pct / 100)
+        stop_loss := entry_price + (entry_price * 2.0 / 100)
+        
+    [target1, target2, target3, stop_loss]
+
+// === BASIC SIGNAL REGISTRATION ===
+
+// New signal registration (simplified for Part 1)
+if bullish_signal_detected and array.size(signal_ids) < max_active_signals
+    signal_counter += 1
+    [t1, t2, t3, sl] = calculate_targets("bullish", close, bb1_upper_source, bb1_lower_source, bb2_upper_source, bb2_lower_source)
+    
+    array.push(signal_ids, signal_counter)
+    array.push(signal_bars, bar_index)
+    array.push(signal_types, "bullish")
+    array.push(entry_prices, close)
+    array.push(target1_prices, t1)
+    array.push(target2_prices, t2)
+    array.push(target3_prices, t3)
+    array.push(target1_hit, false)
+    array.push(target2_hit, false)
+    array.push(target3_hit, false)
+    array.push(signal_completed, false)
+    array.push(signal_pnl, 0.0)
+
+if bearish_signal_detected and array.size(signal_ids) < max_active_signals
+    signal_counter += 1
+    [t1, t2, t3, sl] = calculate_targets("bearish", close, bb1_upper_source, bb1_lower_source, bb2_upper_source, bb2_lower_source)
+    
+    array.push(signal_ids, signal_counter)
+    array.push(signal_bars, bar_index)
+    array.push(signal_types, "bearish")
+    array.push(entry_prices, close)
+    array.push(target1_prices, t1)
+    array.push(target2_prices, t2)
+    array.push(target3_prices, t3)
+    array.push(target1_hit, false)
+    array.push(target2_hit, false)
+    array.push(target3_hit, false)
+    array.push(signal_completed, false)
+    array.push(signal_pnl, 0.0)
+
+// === BASIC VISUALIZATION ===
+
+// Visual markers
+plotshape(bullish_signal_detected, "Bullish Signal Detected", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(bearish_signal_detected, "Bearish Signal Detected", shape.triangledown, location.abovebar, color.red, size=size.small)
+
+// Basic plots
+plot(array.size(signal_ids), "Active Signals", color=color.blue, linewidth=2)
+plot(signal_counter, "Total Signals", color=color.orange, linewidth=1)
+
+// === ALERTS ===
+
+alertcondition(bullish_signal_detected, title="Bullish Divergence Tracked", 
+               message="New bullish divergence detected and added to tracker")
+
+alertcondition(bearish_signal_detected, title="Bearish Divergence Tracked",
+               message="New bearish divergence detected and added to tracker")
+
+// ================================
+// PART 1 COMPLETE - CORE FUNCTIONALITY
+// See Part 2 for advanced tracking and statistics
+// See Part 3 for visual tables and performance analysis
+// ================================
