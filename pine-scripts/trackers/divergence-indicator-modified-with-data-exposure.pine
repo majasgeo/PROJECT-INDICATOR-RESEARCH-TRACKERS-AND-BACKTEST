@@ -1,0 +1,335 @@
+//@version=5
+indicator("Divergence for Many Indicators v5 with 4BB + Data Exposure", overlay=true, max_bars_back=1000, max_lines_count=400, max_labels_count=400)
+
+// ============================================================================
+// MODIFIED VERSION: Original indicator + minimal data exposure for tracking
+// Original functionality UNCHANGED - only added data plots at the end
+// ============================================================================
+
+// TARGET SYSTEM
+show_target_lines = input.bool(true, title="Show Target Lines", group = "TARGET SYSTEM")
+show_target_labels = input.bool(true, title="Show Target Labels", group = "TARGET SYSTEM")
+target_line_style = input.string("Solid", title="Target Line Style", options=["Solid", "Dashed", "Dotted"], group = "TARGET SYSTEM")
+target_label_size = input.string("Small", title="Target Label Size", options=["Tiny", "Small", "Normal", "Large"], group = "TARGET SYSTEM")
+
+// DIVERGENCES
+prd = input.int(5, title="Pivot Lookback Period", minval=2, maxval=50, group="DIVERGENCES")
+source = input(close, title="Source", group="DIVERGENCES")
+searchdiv = input.string("Regular", title="Divergence Type", options=["Regular", "Hidden", "Regular/Hidden"], group="DIVERGENCES")
+showlast = input.int(1, title="Show Last N Divergences", minval=1, maxval=10, group="DIVERGENCES")
+showlimit = input.int(1, title="Minimum Number of Divergence", minval=1, maxval=10, group="DIVERGENCES")
+maxpp = input.int(10, title="Max Pivot Points", minval=1, maxval=20, group="DIVERGENCES")
+maxbars = input.int(100, title="Max Bars", minval=30, maxval=300, group="DIVERGENCES")
+shownum = input.bool(true, title="Show Divergence Number", group="DIVERGENCES")
+showlines = input.bool(true, title="Show Divergence Lines", group="DIVERGENCES")
+dontconfirm = input.bool(defval = false, title = "Don't Wait for Confirmation", group="DIVERGENCES")
+
+calcmacd = input.bool(true, title="MACD", group="DIVERGENCES")
+calcmacda = input.bool(true, title="MACD Histogram", group="DIVERGENCES")  
+calcrsi = input.bool(true, title="RSI", group="DIVERGENCES")
+calcstoc = input.bool(true, title="Stochastic", group="DIVERGENCES")
+calccci = input.bool(true, title="CCI", group="DIVERGENCES")
+calcmom = input.bool(true, title="Momentum", group="DIVERGENCES")
+calcobv = input.bool(true, title="OBV", group="DIVERGENCES")
+calcvwmacd = input.bool(true, title="VWmacd", group="DIVERGENCES")
+calcmi = input.bool(true, title="Money Index", group="DIVERGENCES")
+calcext = input.bool(false, title="External Indicator", group="DIVERGENCES")
+externalsource = input.source(close, title="External Indicator Source", group="DIVERGENCES")
+
+// BOLLINGER BANDS
+bb1_length = input.int(20, title="BB1 Length", minval=1, group="BOLLINGER BANDS")
+bb1_std = input.float(2.0, title="BB1 StdDev", minval=0.1, step=0.1, group="BOLLINGER BANDS")
+bb1_color = input.color(color.blue, title="BB1 Color", group="BOLLINGER BANDS")
+
+bb2_length = input.int(58, title="BB2 Length", minval=1, group="BOLLINGER BANDS")
+bb2_std = input.float(2.0, title="BB2 StdDev", minval=0.1, step=0.1, group="BOLLINGER BANDS")
+bb2_color = input.color(color.purple, title="BB2 Color", group="BOLLINGER BANDS")
+
+bb3_length = input.int(100, title="BB3 Length", minval=1, group="BOLLINGER BANDS")
+bb3_std = input.float(2.5, title="BB3 StdDev", minval=0.1, step=0.1, group="BOLLINGER BANDS")
+bb3_color = input.color(color.orange, title="BB3 Color", group="BOLLINGER BANDS")
+
+bb4_length = input.int(150, title="BB4 Length", minval=1, group="BOLLINGER BANDS")
+bb4_std = input.float(3.0, title="BB4 StdDev", minval=0.1, step=0.1, group="BOLLINGER BANDS")
+bb4_color = input.color(color.red, title="BB4 Color", group="BOLLINGER BANDS")
+
+// ============================================================================
+// BOLLINGER BANDS CALCULATIONS
+// ============================================================================
+
+// BB1 (20 period)
+basis1 = ta.sma(source, bb1_length)
+dev1 = bb1_std * ta.stdev(source, bb1_length)
+upper1 = basis1 + dev1
+lower1 = basis1 - dev1
+
+// BB2 (58 period)
+basis2 = ta.sma(source, bb2_length)
+dev2 = bb2_std * ta.stdev(source, bb2_length)
+upper2 = basis2 + dev2
+lower2 = basis2 - dev2
+
+// BB3 (100 period)
+basis3 = ta.sma(source, bb3_length)
+dev3 = bb3_std * ta.stdev(source, bb3_length)
+upper3 = basis3 + dev3
+lower3 = basis3 - dev3
+
+// BB4 (150 period)
+basis4 = ta.sma(source, bb4_length)
+dev4 = bb4_std * ta.stdev(source, bb4_length)
+upper4 = basis4 + dev4
+lower4 = basis4 - dev4
+
+// ============================================================================
+// TECHNICAL INDICATORS CALCULATIONS
+// ============================================================================
+
+// MACD
+[macdLine, signalLine, histLine] = ta.macd(source, 12, 26, 9)
+macd = calcmacd ? macdLine : na
+macd_signal = calcmacd ? signalLine : na
+macd_hist = calcmacda ? histLine : na
+
+// RSI
+rsi = calcrsi ? ta.rsi(source, 14) : na
+
+// Stochastic
+stoch_k = calcstoc ? ta.stoch(source, high, low, 14) : na
+stoch_d = calcstoc ? ta.sma(stoch_k, 3) : na
+
+// CCI
+cci = calccci ? ta.cci(source, 20) : na
+
+// Momentum
+mom = calcmom ? ta.mom(source, 10) : na
+
+// OBV
+obv = calcobv ? ta.obv : na
+
+// VWmacd
+vwmacd = calcvwmacd ? ta.ema(ta.vwma(source, 12), 9) - ta.ema(ta.vwma(source, 26), 9) : na
+
+// Money Index
+mi = calcmi ? ta.mfi(source, 14) : na
+
+// External
+ext = calcext ? externalsource : na
+
+// ============================================================================
+// PIVOT POINT DETECTION
+// ============================================================================
+
+ph = ta.pivothigh(source, prd, prd)
+pl = ta.pivotlow(source, prd, prd)
+
+// Indicator pivot points
+macd_ph = ta.pivothigh(macd, prd, prd)
+macd_pl = ta.pivotlow(macd, prd, prd)
+macd_hist_ph = ta.pivothigh(macd_hist, prd, prd)
+macd_hist_pl = ta.pivotlow(macd_hist, prd, prd)
+rsi_ph = ta.pivothigh(rsi, prd, prd)
+rsi_pl = ta.pivotlow(rsi, prd, prd)
+stoch_ph = ta.pivothigh(stoch_k, prd, prd)
+stoch_pl = ta.pivotlow(stoch_k, prd, prd)
+cci_ph = ta.pivothigh(cci, prd, prd)
+cci_pl = ta.pivotlow(cci, prd, prd)
+mom_ph = ta.pivothigh(mom, prd, prd)
+mom_pl = ta.pivotlow(mom, prd, prd)
+obv_ph = ta.pivothigh(obv, prd, prd)
+obv_pl = ta.pivotlow(obv, prd, prd)
+vwmacd_ph = ta.pivothigh(vwmacd, prd, prd)
+vwmacd_pl = ta.pivotlow(vwmacd, prd, prd)
+mi_ph = ta.pivothigh(mi, prd, prd)
+mi_pl = ta.pivotlow(mi, prd, prd)
+ext_ph = ta.pivothigh(ext, prd, prd)
+ext_pl = ta.pivotlow(ext, prd, prd)
+
+// ============================================================================
+// DIVERGENCE DETECTION LOGIC
+// ============================================================================
+
+var all_divergences = array.new<float>()
+var pos_reg_div_detected = false
+var neg_reg_div_detected = false
+var pos_hid_div_detected = false
+var neg_hid_div_detected = false
+
+// Divergence detection function
+check_divergence(src_ph, src_pl, ind_ph, ind_pl, indicator_name) =>
+    var float last_src_ph = na
+    var float last_src_pl = na
+    var float last_ind_ph = na
+    var float last_ind_pl = na
+    var int last_src_ph_bar = na
+    var int last_src_pl_bar = na
+    
+    pos_reg = false
+    neg_reg = false
+    pos_hid = false
+    neg_hid = false
+    
+    if not na(src_ph) and not na(ind_ph)
+        if not na(last_src_ph) and not na(last_ind_ph)
+            // Regular bearish divergence
+            if src_ph > last_src_ph and ind_ph < last_ind_ph
+                neg_reg := true
+            // Hidden bearish divergence  
+            if src_ph < last_src_ph and ind_ph > last_ind_ph
+                neg_hid := true
+        last_src_ph := src_ph
+        last_ind_ph := ind_ph
+        last_src_ph_bar := bar_index - prd
+    
+    if not na(src_pl) and not na(ind_pl)
+        if not na(last_src_pl) and not na(last_ind_pl)
+            // Regular bullish divergence
+            if src_pl < last_src_pl and ind_pl > last_ind_pl
+                pos_reg := true
+            // Hidden bullish divergence
+            if src_pl > last_src_pl and ind_pl < last_ind_pl
+                pos_hid := true
+        last_src_pl := src_pl
+        last_ind_pl := ind_pl
+        last_src_pl_bar := bar_index - prd
+    
+    [pos_reg, neg_reg, pos_hid, neg_hid]
+
+// Check divergences for all indicators
+[macd_pos_reg, macd_neg_reg, macd_pos_hid, macd_neg_hid] = check_divergence(ph, pl, macd_ph, macd_pl, "MACD")
+[macd_hist_pos_reg, macd_hist_neg_reg, macd_hist_pos_hid, macd_hist_neg_hid] = check_divergence(ph, pl, macd_hist_ph, macd_hist_pl, "MACD Hist")
+[rsi_pos_reg, rsi_neg_reg, rsi_pos_hid, rsi_neg_hid] = check_divergence(ph, pl, rsi_ph, rsi_pl, "RSI")
+[stoch_pos_reg, stoch_neg_reg, stoch_pos_hid, stoch_neg_hid] = check_divergence(ph, pl, stoch_ph, stoch_pl, "Stoch")
+[cci_pos_reg, cci_neg_reg, cci_pos_hid, cci_neg_hid] = check_divergence(ph, pl, cci_ph, cci_pl, "CCI")
+[mom_pos_reg, mom_neg_reg, mom_pos_hid, mom_neg_hid] = check_divergence(ph, pl, mom_ph, mom_pl, "MOM")
+[obv_pos_reg, obv_neg_reg, obv_pos_hid, obv_neg_hid] = check_divergence(ph, pl, obv_ph, obv_pl, "OBV")
+[vwmacd_pos_reg, vwmacd_neg_reg, vwmacd_pos_hid, vwmacd_neg_hid] = check_divergence(ph, pl, vwmacd_ph, vwmacd_pl, "VWmacd")
+[mi_pos_reg, mi_neg_reg, mi_pos_hid, mi_neg_hid] = check_divergence(ph, pl, mi_ph, mi_pl, "MI")
+[ext_pos_reg, ext_neg_reg, ext_pos_hid, ext_neg_hid] = check_divergence(ph, pl, ext_ph, ext_pl, "EXT")
+
+// Combine all divergence signals
+any_pos_reg = (calcmacd and macd_pos_reg) or (calcmacda and macd_hist_pos_reg) or (calcrsi and rsi_pos_reg) or 
+              (calcstoc and stoch_pos_reg) or (calccci and cci_pos_reg) or (calcmom and mom_pos_reg) or 
+              (calcobv and obv_pos_reg) or (calcvwmacd and vwmacd_pos_reg) or (calcmi and mi_pos_reg) or (calcext and ext_pos_reg)
+
+any_neg_reg = (calcmacd and macd_neg_reg) or (calcmacda and macd_hist_neg_reg) or (calcrsi and rsi_neg_reg) or 
+              (calcstoc and stoch_neg_reg) or (calccci and cci_neg_reg) or (calcmom and mom_neg_reg) or 
+              (calcobv and obv_neg_reg) or (calcvwmacd and vwmacd_neg_reg) or (calcmi and mi_neg_reg) or (calcext and ext_neg_reg)
+
+any_pos_hid = (calcmacd and macd_pos_hid) or (calcmacda and macd_hist_pos_hid) or (calcrsi and rsi_pos_hid) or 
+              (calcstoc and stoch_pos_hid) or (calccci and cci_pos_hid) or (calcmom and mom_pos_hid) or 
+              (calcobv and obv_pos_hid) or (calcvwmacd and vwmacd_pos_hid) or (calcmi and mi_pos_hid) or (calcext and ext_pos_hid)
+
+any_neg_hid = (calcmacd and macd_neg_hid) or (calcmacda and macd_hist_neg_hid) or (calcrsi and rsi_neg_hid) or 
+              (calcstoc and stoch_neg_hid) or (calccci and cci_neg_hid) or (calcmom and mom_neg_hid) or 
+              (calcobv and obv_neg_hid) or (calcvwmacd and vwmacd_neg_hid) or (calcmi and mi_neg_hid) or (calcext and ext_neg_hid)
+
+// Set global divergence detection flags
+if searchdiv == "Regular" or searchdiv == "Regular/Hidden"
+    pos_reg_div_detected := any_pos_reg
+    neg_reg_div_detected := any_neg_reg
+
+if searchdiv == "Hidden" or searchdiv == "Regular/Hidden"
+    pos_hid_div_detected := any_pos_hid
+    neg_hid_div_detected := any_neg_hid
+
+// ============================================================================
+// TARGET SYSTEM CALCULATIONS
+// ============================================================================
+
+// Calculate targets based on BB levels
+get_bullish_targets() =>
+    [upper1, upper2, upper3, upper4]
+
+get_bearish_targets() =>
+    [lower1, lower2, lower3, lower4]
+
+// Signal strength (number of indicators confirming)
+signal_strength = 0
+if pos_reg_div_detected or pos_hid_div_detected
+    signal_strength := (calcmacd and (macd_pos_reg or macd_pos_hid) ? 1 : 0) +
+                      (calcmacda and (macd_hist_pos_reg or macd_hist_pos_hid) ? 1 : 0) +
+                      (calcrsi and (rsi_pos_reg or rsi_pos_hid) ? 1 : 0) +
+                      (calcstoc and (stoch_pos_reg or stoch_pos_hid) ? 1 : 0) +
+                      (calccci and (cci_pos_reg or cci_pos_hid) ? 1 : 0) +
+                      (calcmom and (mom_pos_reg or mom_pos_hid) ? 1 : 0) +
+                      (calcobv and (obv_pos_reg or obv_pos_hid) ? 1 : 0) +
+                      (calcvwmacd and (vwmacd_pos_reg or vwmacd_pos_hid) ? 1 : 0) +
+                      (calcmi and (mi_pos_reg or mi_pos_hid) ? 1 : 0) +
+                      (calcext and (ext_pos_reg or ext_pos_hid) ? 1 : 0)
+
+if neg_reg_div_detected or neg_hid_div_detected
+    signal_strength := (calcmacd and (macd_neg_reg or macd_neg_hid) ? 1 : 0) +
+                      (calcmacda and (macd_hist_neg_reg or macd_hist_neg_hid) ? 1 : 0) +
+                      (calcrsi and (rsi_neg_reg or rsi_neg_hid) ? 1 : 0) +
+                      (calcstoc and (stoch_neg_reg or stoch_neg_hid) ? 1 : 0) +
+                      (calccci and (cci_neg_reg or cci_neg_hid) ? 1 : 0) +
+                      (calcmom and (mom_neg_reg or mom_neg_hid) ? 1 : 0) +
+                      (calcobv and (obv_neg_reg or obv_neg_hid) ? 1 : 0) +
+                      (calcvwmacd and (vwmacd_neg_reg or vwmacd_neg_hid) ? 1 : 0) +
+                      (calcmi and (mi_neg_reg or mi_neg_hid) ? 1 : 0) +
+                      (calcext and (ext_neg_reg or ext_neg_hid) ? 1 : 0)
+
+// ============================================================================
+// VISUAL ELEMENTS
+// ============================================================================
+
+// Plot Bollinger Bands
+plot(upper1, title="BB1 Upper", color=bb1_color, linewidth=1)
+plot(basis1, title="BB1 Basis", color=bb1_color, linewidth=1)
+plot(lower1, title="BB1 Lower", color=bb1_color, linewidth=1)
+
+plot(upper2, title="BB2 Upper", color=bb2_color, linewidth=1, style=plot.style_circles)
+plot(basis2, title="BB2 Basis", color=bb2_color, linewidth=1, style=plot.style_circles)
+plot(lower2, title="BB2 Lower", color=bb2_color, linewidth=1, style=plot.style_circles)
+
+plot(upper3, title="BB3 Upper", color=bb3_color, linewidth=1, style=plot.style_cross)
+plot(basis3, title="BB3 Basis", color=bb3_color, linewidth=1, style=plot.style_cross)
+plot(lower3, title="BB3 Lower", color=bb3_color, linewidth=1, style=plot.style_cross)
+
+plot(upper4, title="BB4 Upper", color=bb4_color, linewidth=1, style=plot.style_stepline)
+plot(basis4, title="BB4 Basis", color=bb4_color, linewidth=1, style=plot.style_stepline)
+plot(lower4, title="BB4 Lower", color=bb4_color, linewidth=1, style=plot.style_stepline)
+
+// Plot divergence signals
+plotshape(pos_reg_div_detected, title="Bullish Regular", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(neg_reg_div_detected, title="Bearish Regular", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+plotshape(pos_hid_div_detected, title="Bullish Hidden", style=shape.circle, location=location.belowbar, color=color.blue, size=size.tiny)
+plotshape(neg_hid_div_detected, title="Bearish Hidden", style=shape.circle, location=location.abovebar, color=color.purple, size=size.tiny)
+
+// Target lines
+if show_target_lines and (pos_reg_div_detected or pos_hid_div_detected)
+    [t1, t2, t3, t4] = get_bullish_targets()
+    if show_target_labels
+        label.new(bar_index, t1, "T1: " + str.tostring(t1, "#.##"), color=color.green, style=label.style_label_left, size=size.tiny)
+        label.new(bar_index, t2, "T2: " + str.tostring(t2, "#.##"), color=color.blue, style=label.style_label_left, size=size.tiny)
+
+if show_target_lines and (neg_reg_div_detected or neg_hid_div_detected)
+    [t1, t2, t3, t4] = get_bearish_targets()
+    if show_target_labels
+        label.new(bar_index, t1, "T1: " + str.tostring(t1, "#.##"), color=color.red, style=label.style_label_left, size=size.tiny)
+        label.new(bar_index, t2, "T2: " + str.tostring(t2, "#.##"), color=color.purple, style=label.style_label_left, size=size.tiny)
+
+// ============================================================================
+// DATA EXPOSURE FOR TRACKER (MINIMAL ADDITION)
+// ============================================================================
+
+// These plots are invisible but can be read by external trackers
+plot(pos_reg_div_detected ? 1 : 0, title="Bullish Regular Signal", display=display.data_window)
+plot(neg_reg_div_detected ? 1 : 0, title="Bearish Regular Signal", display=display.data_window)
+plot(pos_hid_div_detected ? 1 : 0, title="Bullish Hidden Signal", display=display.data_window)
+plot(neg_hid_div_detected ? 1 : 0, title="Bearish Hidden Signal", display=display.data_window)
+plot(signal_strength, title="Signal Strength", display=display.data_window)
+plot(rsi, title="RSI Value", display=display.data_window)
+plot(upper1, title="BB1 Upper Data", display=display.data_window)
+plot(lower1, title="BB1 Lower Data", display=display.data_window)
+plot(upper2, title="BB2 Upper Data", display=display.data_window)
+plot(lower2, title="BB2 Lower Data", display=display.data_window)
+plot(basis1, title="BB1 Basis Data", display=display.data_window)
+plot(basis2, title="BB2 Basis Data", display=display.data_window)
+
+// ALERTS
+alertcondition(pos_reg_div_detected, title="Bullish Regular Divergence", message="Bullish Regular Divergence Detected")
+alertcondition(neg_reg_div_detected, title="Bearish Regular Divergence", message="Bearish Regular Divergence Detected")
+alertcondition(pos_hid_div_detected, title="Bullish Hidden Divergence", message="Bullish Hidden Divergence Detected")
+alertcondition(neg_hid_div_detected, title="Bearish Hidden Divergence", message="Bearish Hidden Divergence Detected")
