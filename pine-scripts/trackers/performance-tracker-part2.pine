@@ -1,0 +1,197 @@
+//@version=5
+indicator("Divergence Performance Tracker v1.0 - Part 2", shorttitle="Div Tracker P2", overlay=false, max_bars_back=1000)
+
+// ================================
+// 🎯 DIVERGENCE PERFORMANCE TRACKER v1.0 - PART 2
+// ADVANCED TRACKING & STATISTICS
+// This is Part 2 - requires Part 1 for core functions
+// ================================
+
+// === ADVANCED TRACKING LOGIC ===
+
+// Extended arrays for comprehensive tracking
+var array<float> stop_prices = array.new<float>()
+var array<bool> stop_hit = array.new<bool>()
+var array<int> signal_duration = array.new<int>()
+var array<float> max_favorable = array.new<float>()
+var array<float> max_adverse = array.new<float>()
+
+// Completed signals for statistics
+var array<string> completed_signal_types = array.new<string>()
+var array<float> completed_signal_pnl = array.new<float>()
+var array<bool> completed_target1_hit = array.new<bool>()
+var array<bool> completed_target2_hit = array.new<bool>()
+var array<bool> completed_target3_hit = array.new<bool>()
+var array<int> completed_signal_duration = array.new<int>()
+var array<float> completed_max_favorable = array.new<float>()
+var array<float> completed_max_adverse = array.new<float>()
+
+// === ADVANCED SIGNAL TRACKING ===
+
+// Update active signals with detailed tracking
+if array.size(signal_ids) > 0  // Assuming signal_ids exists from Part 1
+    for i = 0 to array.size(signal_ids) - 1
+        if not array.get(signal_completed, i)
+            signal_type = array.get(signal_types, i)
+            entry_price = array.get(entry_prices, i)
+            signal_bar = array.get(signal_bars, i)
+            duration = bar_index - signal_bar
+            
+            // Update duration
+            if i < array.size(signal_duration)
+                array.set(signal_duration, i, duration)
+            else
+                array.push(signal_duration, duration)
+            
+            // Calculate current PnL and extremes
+            current_pnl = 0.0
+            favorable_move = 0.0
+            adverse_move = 0.0
+            
+            if signal_type == "bullish"
+                current_pnl := (close - entry_price) / entry_price * 100
+                favorable_move := (high - entry_price) / entry_price * 100
+                adverse_move := (low - entry_price) / entry_price * 100
+            else
+                current_pnl := (entry_price - close) / entry_price * 100
+                favorable_move := (entry_price - low) / entry_price * 100
+                adverse_move := (entry_price - high) / entry_price * 100
+            
+            // Update PnL
+            if i < array.size(signal_pnl)
+                array.set(signal_pnl, i, current_pnl)
+            else
+                array.push(signal_pnl, current_pnl)
+            
+            // Update max favorable/adverse
+            if i < array.size(max_favorable)
+                current_max_fav = math.max(array.get(max_favorable, i), favorable_move)
+                array.set(max_favorable, i, current_max_fav)
+            else
+                array.push(max_favorable, favorable_move)
+            
+            if i < array.size(max_adverse)
+                current_max_adv = math.min(array.get(max_adverse, i), adverse_move)
+                array.set(max_adverse, i, current_max_adv)
+            else
+                array.push(max_adverse, adverse_move)
+            
+            // Target hit detection
+            if signal_type == "bullish"
+                if close >= array.get(target3_prices, i) and not array.get(target3_hit, i)
+                    array.set(target3_hit, i, true)
+                    array.set(target2_hit, i, true)
+                    array.set(target1_hit, i, true)
+                    array.set(signal_completed, i, true)
+                else if close >= array.get(target2_prices, i) and not array.get(target2_hit, i)
+                    array.set(target2_hit, i, true)
+                    array.set(target1_hit, i, true)
+                else if close >= array.get(target1_prices, i) and not array.get(target1_hit, i)
+                    array.set(target1_hit, i, true)
+            else
+                if close <= array.get(target3_prices, i) and not array.get(target3_hit, i)
+                    array.set(target3_hit, i, true)
+                    array.set(target2_hit, i, true)
+                    array.set(target1_hit, i, true)
+                    array.set(signal_completed, i, true)
+                else if close <= array.get(target2_prices, i) and not array.get(target2_hit, i)
+                    array.set(target2_hit, i, true)
+                    array.set(target1_hit, i, true)
+                else if close <= array.get(target1_prices, i) and not array.get(target1_hit, i)
+                    array.set(target1_hit, i, true)
+            
+            // Timeout check
+            if duration >= 100 and not array.get(signal_completed, i)  // Assuming 100 bar timeout
+                array.set(signal_completed, i, true)
+
+// === PERFORMANCE CALCULATIONS ===
+
+calculate_performance() =>
+    total = array.size(completed_signal_types)
+    wins = 0
+    total_pnl = 0.0
+    best_trade = 0.0
+    worst_trade = 0.0
+    total_bars = 0
+    t1_hits = 0
+    t2_hits = 0
+    t3_hits = 0
+    
+    if total > 0
+        for i = 0 to total - 1
+            pnl = array.get(completed_signal_pnl, i)
+            duration = array.get(completed_signal_duration, i)
+            
+            total_pnl += pnl
+            total_bars += duration
+            
+            if pnl > 0
+                wins += 1
+            
+            if pnl > best_trade
+                best_trade := pnl
+            if pnl < worst_trade
+                worst_trade := pnl
+                
+            // Target statistics
+            if array.get(completed_target1_hit, i)
+                t1_hits += 1
+            if array.get(completed_target2_hit, i)
+                t2_hits += 1
+            if array.get(completed_target3_hit, i)
+                t3_hits += 1
+    
+    win_rate = total > 0 ? wins / total * 100 : 0
+    avg_pnl = total > 0 ? total_pnl / total : 0
+    avg_duration = total > 0 ? total_bars / total : 0
+    
+    [total, wins, win_rate, avg_pnl, best_trade, worst_trade, avg_duration, t1_hits, t2_hits, t3_hits]
+
+[total_signals, win_count, win_rate, avg_pnl, best_trade, worst_trade, avg_duration, target1_hits, target2_hits, target3_hits] = calculate_performance()
+
+// === COMPLETED SIGNALS MANAGEMENT ===
+
+// Move completed signals to history (cleanup logic)
+if array.size(signal_ids) > 0
+    for i = array.size(signal_ids) - 1 to 0
+        if i < array.size(signal_completed) and array.get(signal_completed, i)
+            // Move to completed arrays
+            array.push(completed_signal_types, array.get(signal_types, i))
+            array.push(completed_signal_pnl, array.get(signal_pnl, i))
+            array.push(completed_target1_hit, array.get(target1_hit, i))
+            array.push(completed_target2_hit, array.get(target2_hit, i))
+            array.push(completed_target3_hit, array.get(target3_hit, i))
+            array.push(completed_signal_duration, array.get(signal_duration, i))
+            
+            // Note: Array removal would happen in Part 3 (UI Management)
+
+// === ADVANCED PLOTS ===
+
+// Performance plots
+plot(win_rate, "Win Rate %", color=color.blue, linewidth=2)
+plot(avg_pnl, "Avg PnL %", color=avg_pnl >= 0 ? color.green : color.red, linewidth=1)
+plot(total_signals, "Total Completed", color=color.orange, linewidth=1)
+
+// Target hit rates
+plot(total_signals > 0 ? target1_hits / total_signals * 100 : 0, "Target 1 Hit Rate", color=color.yellow, linewidth=1)
+plot(total_signals > 0 ? target2_hits / total_signals * 100 : 0, "Target 2 Hit Rate", color=color.purple, linewidth=1)
+
+// === ADVANCED ALERTS ===
+
+alertcondition(win_rate >= 70 and total_signals >= 10, title="High Win Rate Achieved",
+               message="Excellent performance: " + str.tostring(win_rate, "#.1") + "% win rate over " + str.tostring(total_signals) + " signals")
+
+alertcondition(win_rate <= 30 and total_signals >= 10, title="Low Win Rate Warning", 
+               message="Performance warning: " + str.tostring(win_rate, "#.1") + "% win rate over " + str.tostring(total_signals) + " signals")
+
+alertcondition(total_signals == 25, title="Milestone: 25 Signals",
+               message="Research milestone reached: 25 signals completed with " + str.tostring(win_rate, "#.1") + "% win rate")
+
+alertcondition(total_signals == 50, title="Milestone: 50 Signals",
+               message="Statistical significance: 50 signals completed with " + str.tostring(win_rate, "#.1") + "% win rate")
+
+// ================================
+// PART 2 COMPLETE - ADVANCED TRACKING
+// See Part 1 for core functions and inputs
+// See Part 3 for visual tables and user interface
+// ================================
