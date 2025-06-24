@@ -1,0 +1,488 @@
+//@version=5
+indicator("Perfect Divergence Tracker v2.0", shorttitle="Perfect Tracker", overlay=false, max_bars_back=1000, max_lines_count=500, max_labels_count=500)
+
+// ================================
+// 🎯 CONNECTION TO MAIN INDICATOR
+// ================================
+
+// INPUT SOURCES - Connect these to your main indicator outputs
+bullish_regular_source = input.source(close, "Bullish Regular Signal", group="🔗 MAIN INDICATOR CONNECTION")
+bearish_regular_source = input.source(close, "Bearish Regular Signal", group="🔗 MAIN INDICATOR CONNECTION")
+bullish_hidden_source = input.source(close, "Bullish Hidden Signal", group="🔗 MAIN INDICATOR CONNECTION")
+bearish_hidden_source = input.source(close, "Bearish Hidden Signal", group="🔗 MAIN INDICATOR CONNECTION")
+signal_strength_source = input.source(close, "Signal Strength", group="🔗 MAIN INDICATOR CONNECTION")
+rsi_source = input.source(close, "RSI Value", group="🔗 MAIN INDICATOR CONNECTION")
+bb1_upper_source = input.source(close, "BB1 Upper", group="🔗 MAIN INDICATOR CONNECTION")
+bb1_lower_source = input.source(close, "BB1 Lower", group="🔗 MAIN INDICATOR CONNECTION")
+bb2_upper_source = input.source(close, "BB2 Upper", group="🔗 MAIN INDICATOR CONNECTION")
+bb2_lower_source = input.source(close, "BB2 Lower", group="🔗 MAIN INDICATOR CONNECTION")
+bb1_basis_source = input.source(close, "BB1 Basis", group="🔗 MAIN INDICATOR CONNECTION")
+bb2_basis_source = input.source(close, "BB2 Basis", group="🔗 MAIN INDICATOR CONNECTION")
+
+// ================================
+// ⚙️ TRACKER SETTINGS
+// ================================
+
+tracking_period = input.int(200, "Historical Tracking Period", minval=50, maxval=500, group="📊 TRACKER SETTINGS")
+min_signal_strength = input.int(1, "Minimum Signal Strength", minval=1, maxval=10, group="📊 TRACKER SETTINGS")
+max_active_signals = input.int(10, "Max Active Signals", minval=5, maxval=20, group="📊 TRACKER SETTINGS")
+
+// ================================
+// 🎯 TARGET SETTINGS
+// ================================
+
+bb1_target_distance = input.float(2.5, "BB1 Target Distance %", minval=1.0, maxval=10.0, step=0.1, group="🎯 TARGET SETTINGS")
+bb2_target_distance = input.float(5.0, "BB2 Target Distance %", minval=2.0, maxval=15.0, step=0.1, group="🎯 TARGET SETTINGS")
+extended_target_distance = input.float(7.5, "Extended Target Distance %", minval=3.0, maxval=20.0, step=0.1, group="🎯 TARGET SETTINGS")
+stop_loss_distance = input.float(2.0, "Stop Loss Distance %", minval=1.0, maxval=5.0, step=0.1, group="🎯 TARGET SETTINGS")
+target_timeout = input.int(100, "Target Timeout (Bars)", minval=20, maxval=200, group="🎯 TARGET SETTINGS")
+
+// ================================
+// 📊 VISUAL SETTINGS
+// ================================
+
+show_performance_table = input.bool(true, "Show Performance Table", group="📊 VISUAL SETTINGS")
+show_active_signals_table = input.bool(true, "Show Active Signals", group="📊 VISUAL SETTINGS")
+table_position = input.string("Top Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="📊 VISUAL SETTINGS")
+table_size = input.string("Small", "Table Size", options=["Tiny", "Small", "Normal", "Large"], group="📊 VISUAL SETTINGS")
+
+// ================================
+// 📦 DATA STRUCTURES
+// ================================
+
+// Signal data structure
+type SignalData
+    int id
+    string signal_type
+    float entry_price
+    float entry_rsi
+    float bb_position
+    int entry_bar
+    float target1
+    float target2
+    float target3
+    float stop_loss
+    bool target1_hit
+    bool target2_hit
+    bool target3_hit
+    bool stop_hit
+    bool completed
+    float max_favorable
+    float max_adverse
+    float final_pnl
+    int duration
+
+// Signal storage
+var array<SignalData> active_signals = array.new<SignalData>()
+var array<SignalData> completed_signals = array.new<SignalData>()
+var int signal_counter = 0
+
+// ================================
+// 🔍 SIGNAL DETECTION
+// ================================
+
+// Detect new signals
+new_bullish_regular = bullish_regular_source > 0 and bullish_regular_source[1] == 0
+new_bearish_regular = bearish_regular_source > 0 and bearish_regular_source[1] == 0
+new_bullish_hidden = bullish_hidden_source > 0 and bullish_hidden_source[1] == 0
+new_bearish_hidden = bearish_hidden_source > 0 and bearish_hidden_source[1] == 0
+
+// Signal strength filter
+current_strength = signal_strength_source
+strength_ok = current_strength >= min_signal_strength
+
+// ================================
+// 🎯 TARGET CALCULATION
+// ================================
+
+calculate_targets(is_bullish, entry_price, bb1_level, bb2_level) =>
+    if is_bullish
+        target1 = bb1_level
+        target2 = bb2_level  
+        target3 = entry_price * (1 + extended_target_distance / 100)
+        stop = entry_price * (1 - stop_loss_distance / 100)
+    else
+        target1 = bb1_level
+        target2 = bb2_level
+        target3 = entry_price * (1 - extended_target_distance / 100)
+        stop = entry_price * (1 + stop_loss_distance / 100)
+    [target1, target2, target3, stop]
+
+// Calculate BB position (0 = lower BB, 1 = upper BB)
+calculate_bb_position(price, bb_upper, bb_lower) =>
+    bb_range = bb_upper - bb_lower
+    bb_range > 0 ? (price - bb_lower) / bb_range : 0.5
+
+// ================================
+// 📊 SIGNAL MANAGEMENT
+// ================================
+
+// Create new signal
+create_signal(signal_type, is_bullish) =>
+    if array.size(active_signals) < max_active_signals and strength_ok
+        current_bb1_upper = bb1_upper_source
+        current_bb1_lower = bb1_lower_source
+        current_bb2_upper = bb2_upper_source
+        current_bb2_lower = bb2_lower_source
+        current_rsi = rsi_source
+        
+        bb1_level = is_bullish ? current_bb1_upper : current_bb1_lower
+        bb2_level = is_bullish ? current_bb2_upper : current_bb2_lower
+        
+        [t1, t2, t3, sl] = calculate_targets(is_bullish, close, bb1_level, bb2_level)
+        bb_pos = calculate_bb_position(close, current_bb1_upper, current_bb1_lower)
+        
+        signal_counter += 1
+        new_signal = SignalData.new(
+            id = signal_counter,
+            signal_type = signal_type,
+            entry_price = close,
+            entry_rsi = current_rsi,
+            bb_position = bb_pos,
+            entry_bar = bar_index,
+            target1 = t1,
+            target2 = t2,
+            target3 = t3,
+            stop_loss = sl,
+            target1_hit = false,
+            target2_hit = false,
+            target3_hit = false,
+            stop_hit = false,
+            completed = false,
+            max_favorable = 0.0,
+            max_adverse = 0.0,
+            final_pnl = 0.0,
+            duration = 0
+        )
+        array.push(active_signals, new_signal)
+
+// Update active signals
+update_signals() =>
+    for i = array.size(active_signals) - 1 to 0
+        signal = array.get(active_signals, i)
+        is_bullish = str.contains(signal.signal_type, "Bullish")
+        
+        // Calculate current P&L
+        current_pnl = is_bullish ? (close - signal.entry_price) / signal.entry_price * 100 : 
+                                  (signal.entry_price - close) / signal.entry_price * 100
+        
+        // Update max favorable/adverse
+        if current_pnl > signal.max_favorable
+            signal.max_favorable := current_pnl
+        if current_pnl < signal.max_adverse
+            signal.max_adverse := current_pnl
+        
+        // Check targets and stop loss
+        signal_completed = false
+        
+        if is_bullish
+            if not signal.target1_hit and close >= signal.target1
+                signal.target1_hit := true
+            if not signal.target2_hit and close >= signal.target2
+                signal.target2_hit := true
+            if not signal.target3_hit and close >= signal.target3
+                signal.target3_hit := true
+            if not signal.stop_hit and close <= signal.stop_loss
+                signal.stop_hit := true
+                signal_completed := true
+        else
+            if not signal.target1_hit and close <= signal.target1
+                signal.target1_hit := true
+            if not signal.target2_hit and close <= signal.target2
+                signal.target2_hit := true
+            if not signal.target3_hit and close <= signal.target3
+                signal.target3_hit := true
+            if not signal.stop_hit and close >= signal.stop_loss
+                signal.stop_hit := true
+                signal_completed := true
+        
+        // Check timeout
+        signal.duration := bar_index - signal.entry_bar
+        if signal.duration >= target_timeout
+            signal_completed := true
+        
+        // Complete signal if needed
+        if signal_completed and not signal.completed
+            signal.completed := true
+            signal.final_pnl := current_pnl
+            array.push(completed_signals, signal)
+            array.remove(active_signals, i)
+
+// ================================
+// 📈 PERFORMANCE CALCULATION
+// ================================
+
+calculate_performance() =>
+    total = array.size(completed_signals)
+    wins = 0
+    total_pnl = 0.0
+    best_trade = 0.0
+    worst_trade = 0.0
+    total_bars = 0
+    t1_hits = 0
+    t2_hits = 0
+    t3_hits = 0
+    
+    // Per-type statistics
+    br_total = 0
+    br_wins = 0
+    br_pnl = 0.0
+    
+    bh_total = 0
+    bh_wins = 0
+    bh_pnl = 0.0
+    
+    ber_total = 0
+    ber_wins = 0
+    ber_pnl = 0.0
+    
+    beh_total = 0
+    beh_wins = 0
+    beh_pnl = 0.0
+    
+    if total > 0
+        for i = 0 to total - 1
+            signal = array.get(completed_signals, i)
+            
+            if signal.final_pnl > 0
+                wins += 1
+            
+            total_pnl += signal.final_pnl
+            total_bars += signal.duration
+            
+            if signal.final_pnl > best_trade
+                best_trade := signal.final_pnl
+            if signal.final_pnl < worst_trade
+                worst_trade := signal.final_pnl
+            
+            if signal.target1_hit
+                t1_hits += 1
+            if signal.target2_hit
+                t2_hits += 1
+            if signal.target3_hit
+                t3_hits += 1
+            
+            // Per-type stats
+            if signal.signal_type == "Bullish Regular"
+                br_total += 1
+                br_pnl += signal.final_pnl
+                if signal.final_pnl > 0
+                    br_wins += 1
+            else if signal.signal_type == "Bullish Hidden"
+                bh_total += 1
+                bh_pnl += signal.final_pnl
+                if signal.final_pnl > 0
+                    bh_wins += 1
+            else if signal.signal_type == "Bearish Regular"
+                ber_total += 1
+                ber_pnl += signal.final_pnl
+                if signal.final_pnl > 0
+                    ber_wins += 1
+            else if signal.signal_type == "Bearish Hidden"
+                beh_total += 1
+                beh_pnl += signal.final_pnl
+                if signal.final_pnl > 0
+                    beh_wins += 1
+    
+    win_rate = total > 0 ? wins / total * 100 : 0
+    avg_pnl = total > 0 ? total_pnl / total : 0
+    avg_duration = total > 0 ? total_bars / total : 0
+    
+    br_win_rate = br_total > 0 ? br_wins / br_total * 100 : 0
+    bh_win_rate = bh_total > 0 ? bh_wins / bh_total * 100 : 0
+    ber_win_rate = ber_total > 0 ? ber_wins / ber_total * 100 : 0
+    beh_win_rate = beh_total > 0 ? beh_wins / beh_total * 100 : 0
+    
+    [total, wins, win_rate, avg_pnl, best_trade, worst_trade, t1_hits, t2_hits, t3_hits, avg_duration,
+     br_total, br_win_rate, bh_total, bh_win_rate, ber_total, ber_win_rate, beh_total, beh_win_rate]
+
+// ================================
+// 🎨 VISUAL ELEMENTS
+// ================================
+
+// Convert table position
+get_table_position() =>
+    switch table_position
+        "Top Left" => position.top_left
+        "Top Right" => position.top_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Right" => position.bottom_right
+        => position.top_right
+
+// Convert table size
+get_table_size() =>
+    switch table_size
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        => size.small
+
+// ================================
+// 🔄 MAIN EXECUTION
+// ================================
+
+// Process new signals
+if new_bullish_regular and strength_ok
+    create_signal("Bullish Regular", true)
+
+if new_bearish_regular and strength_ok
+    create_signal("Bearish Regular", false)
+
+if new_bullish_hidden and strength_ok
+    create_signal("Bullish Hidden", true)
+
+if new_bearish_hidden and strength_ok
+    create_signal("Bearish Hidden", false)
+
+// Update existing signals
+update_signals()
+
+// Calculate performance
+[total_signals, total_wins, win_rate, avg_pnl, best_trade, worst_trade, 
+ target1_hits, target2_hits, target3_hits, avg_duration,
+ br_total, br_win_rate, bh_total, bh_win_rate, ber_total, ber_win_rate, beh_total, beh_win_rate] = calculate_performance()
+
+// ================================
+// 📊 PERFORMANCE TABLE
+// ================================
+
+var table performance_table = na
+if barstate.islast and show_performance_table
+    table.delete(performance_table)
+    performance_table := table.new(get_table_position(), 3, 16, bgcolor=color.new(color.black, 80), border_width=1)
+    
+    // Header
+    table.cell(performance_table, 0, 0, "🎯 PERFECT TRACKER STATS", text_color=color.white, text_size=get_table_size(), bgcolor=color.new(color.blue, 60))
+    table.cell(performance_table, 1, 0, "VALUE", text_color=color.white, text_size=get_table_size(), bgcolor=color.new(color.blue, 60))
+    table.cell(performance_table, 2, 0, "STATUS", text_color=color.white, text_size=get_table_size(), bgcolor=color.new(color.blue, 60))
+    
+    // Overall stats
+    table.cell(performance_table, 0, 1, "Total Signals", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 1, str.tostring(total_signals), text_color=color.yellow, text_size=get_table_size())
+    table.cell(performance_table, 2, 1, total_signals >= 20 ? "GOOD" : total_signals >= 10 ? "OK" : "LOW", 
+               text_color=total_signals >= 20 ? color.green : total_signals >= 10 ? color.orange : color.red, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 2, "Active Signals", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 2, str.tostring(array.size(active_signals)), text_color=color.aqua, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 3, "Win Rate", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 3, str.tostring(win_rate, "#.1") + "%", 
+               text_color=win_rate >= 60 ? color.green : win_rate >= 40 ? color.orange : color.red, text_size=get_table_size())
+    table.cell(performance_table, 2, 3, win_rate >= 60 ? "EXCELLENT" : win_rate >= 40 ? "GOOD" : "POOR", 
+               text_color=win_rate >= 60 ? color.green : win_rate >= 40 ? color.orange : color.red, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 4, "Avg PnL", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 4, str.tostring(avg_pnl, "#.2") + "%", 
+               text_color=avg_pnl > 0 ? color.green : color.red, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 5, "Best Trade", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 5, "+" + str.tostring(best_trade, "#.2") + "%", text_color=color.green, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 6, "Worst Trade", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 6, str.tostring(worst_trade, "#.2") + "%", text_color=color.red, text_size=get_table_size())
+    
+    // Target hits
+    table.cell(performance_table, 0, 7, "Target 1 Hits", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 7, str.tostring(target1_hits), text_color=color.blue, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 8, "Target 2 Hits", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 8, str.tostring(target2_hits), text_color=color.purple, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 9, "Target 3 Hits", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 9, str.tostring(target3_hits), text_color=color.orange, text_size=get_table_size())
+    
+    // Per-type breakdown
+    table.cell(performance_table, 0, 10, "─── BY SIGNAL TYPE ───", text_color=color.yellow, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 11, "Bull Regular", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 11, str.tostring(br_total) + " | " + str.tostring(br_win_rate, "#.1") + "%", 
+               text_color=br_win_rate >= 50 ? color.green : color.red, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 12, "Bull Hidden", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 12, str.tostring(bh_total) + " | " + str.tostring(bh_win_rate, "#.1") + "%", 
+               text_color=bh_win_rate >= 50 ? color.green : color.red, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 13, "Bear Regular", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 13, str.tostring(ber_total) + " | " + str.tostring(ber_win_rate, "#.1") + "%", 
+               text_color=ber_win_rate >= 50 ? color.green : color.red, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 14, "Bear Hidden", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 14, str.tostring(beh_total) + " | " + str.tostring(beh_win_rate, "#.1") + "%", 
+               text_color=beh_win_rate >= 50 ? color.green : color.red, text_size=get_table_size())
+    
+    table.cell(performance_table, 0, 15, "Avg Duration", text_color=color.white, text_size=get_table_size())
+    table.cell(performance_table, 1, 15, str.tostring(avg_duration, "#.0") + " bars", text_color=color.gray, text_size=get_table_size())
+
+// ================================
+// 📋 ACTIVE SIGNALS TABLE
+// ================================
+
+var table active_table = na
+if barstate.islast and show_active_signals_table and array.size(active_signals) > 0
+    table.delete(active_table)
+    table_rows = math.min(array.size(active_signals) + 1, 11)
+    active_table := table.new(position.bottom_right, 5, table_rows, bgcolor=color.new(color.black, 80), border_width=1)
+    
+    // Header
+    table.cell(active_table, 0, 0, "🔥 ACTIVE SIGNALS", text_color=color.white, text_size=get_table_size(), bgcolor=color.new(color.orange, 60))
+    table.cell(active_table, 1, 0, "TYPE", text_color=color.white, text_size=get_table_size(), bgcolor=color.new(color.orange, 60))
+    table.cell(active_table, 2, 0, "PnL%", text_color=color.white, text_size=get_table_size(), bgcolor=color.new(color.orange, 60))
+    table.cell(active_table, 3, 0, "TARGETS", text_color=color.white, text_size=get_table_size(), bgcolor=color.new(color.orange, 60))
+    table.cell(active_table, 4, 0, "BARS", text_color=color.white, text_size=get_table_size(), bgcolor=color.new(color.orange, 60))
+    
+    // Active signals
+    display_count = math.min(array.size(active_signals), 10)
+    for i = 0 to display_count - 1
+        signal = array.get(active_signals, i)
+        is_bullish = str.contains(signal.signal_type, "Bullish")
+        
+        current_pnl = is_bullish ? (close - signal.entry_price) / signal.entry_price * 100 : 
+                                  (signal.entry_price - close) / signal.entry_price * 100
+        
+        signal_type_short = signal.signal_type == "Bullish Regular" ? "BR" : 
+                           signal.signal_type == "Bullish Hidden" ? "BH" :
+                           signal.signal_type == "Bearish Regular" ? "BeR" : "BeH"
+        
+        targets_hit = (signal.target1_hit ? "1" : "×") + (signal.target2_hit ? "2" : "×") + (signal.target3_hit ? "3" : "×")
+        
+        table.cell(active_table, 0, i + 1, "#" + str.tostring(signal.id), text_color=color.white, text_size=get_table_size())
+        table.cell(active_table, 1, i + 1, signal_type_short, 
+                   text_color=is_bullish ? color.green : color.red, text_size=get_table_size())
+        table.cell(active_table, 2, i + 1, str.tostring(current_pnl, "#.1") + "%", 
+                   text_color=current_pnl > 0 ? color.green : color.red, text_size=get_table_size())
+        table.cell(active_table, 3, i + 1, targets_hit, text_color=color.yellow, text_size=get_table_size())
+        table.cell(active_table, 4, i + 1, str.tostring(signal.duration), text_color=color.gray, text_size=get_table_size())
+
+// ================================
+// 📈 PLOTS
+// ================================
+
+// Performance plots
+plot(win_rate, title="Win Rate %", color=color.blue, linewidth=2)
+plot(avg_pnl, title="Avg PnL %", color=color.green, linewidth=1)
+plot(array.size(active_signals), title="Active Signals", color=color.orange, linewidth=1)
+
+// Signal markers
+plotshape(new_bullish_regular and strength_ok, title="New Bull Regular", style=shape.triangleup, location=location.bottom, color=color.green, size=size.small)
+plotshape(new_bearish_regular and strength_ok, title="New Bear Regular", style=shape.triangledown, location=location.top, color=color.red, size=size.small)
+plotshape(new_bullish_hidden and strength_ok, title="New Bull Hidden", style=shape.circle, location=location.bottom, color=color.blue, size=size.tiny)
+plotshape(new_bearish_hidden and strength_ok, title="New Bear Hidden", style=shape.circle, location=location.top, color=color.purple, size=size.tiny)
+
+// Zero line
+hline(0, "Zero Line", color=color.gray, linestyle=hline.style_dashed)
+hline(50, "50% Win Rate", color=color.yellow, linestyle=hline.style_dotted)
+
+// ================================
+// 🚨 ALERTS
+// ================================
+
+// Performance alerts
+alertcondition(win_rate >= 70 and total_signals >= 10, title="High Win Rate Achieved", message="🎉 High Win Rate Achieved: " + str.tostring(win_rate, "#.1") + "% over " + str.tostring(total_signals) + " trades")
+alertcondition(win_rate <= 30 and total_signals >= 10, title="Low Win Rate Warning", message="⚠️ Low Win Rate Warning: " + str.tostring(win_rate, "#.1") + "% over " + str.tostring(total_signals) + " trades")
+
+// New signal alerts
+alertcondition(new_bullish_regular and strength_ok, title="New Bullish Regular Signal", message="🟢 New bullish regular divergence tracked! Strength: " + str.tostring(current_strength))
+alertcondition(new_bearish_regular and strength_ok, title="New Bearish Regular Signal", message="🔴 New bearish regular divergence tracked! Strength: " + str.tostring(current_strength))
+alertcondition(new_bullish_hidden and strength_ok, title="New Bullish Hidden Signal", message="🔵 New bullish hidden divergence tracked! Strength: " + str.tostring(current_strength))
+alertcondition(new_bearish_hidden and strength_ok, title="New Bearish Hidden Signal", message="🟣 New bearish hidden divergence tracked! Strength: " + str.tostring(current_strength))
