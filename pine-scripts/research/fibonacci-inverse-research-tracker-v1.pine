@@ -1,0 +1,483 @@
+//@version=5
+indicator("Fibonacci Inverse Research Tracker v1.0", shorttitle="Fib Inverse Research", overlay=false, max_bars_back=2000, max_lines_count=500, max_labels_count=500)
+
+// ================================
+// 🔬 FIBONACCI INVERSE RESEARCH TRACKER
+// ================================
+// Purpose: Research tool to test Fibonacci Inverse Theory
+// Theory: When divergence detected, play OPPOSITE direction using Fibonacci projections
+// Method: Measure expected target, project inverse using -1.0 Fibonacci level
+
+// ================================
+// 🔗 CONNECTION SETTINGS
+// ================================
+
+// Connect to main divergence indicator
+bullish_regular_source = input.source(close, "Bullish Regular Signal", group="📡 MAIN INDICATOR CONNECTION")
+bearish_regular_source = input.source(close, "Bearish Regular Signal", group="📡 MAIN INDICATOR CONNECTION")
+rsi_source = input.source(close, "RSI Value", group="📡 MAIN INDICATOR CONNECTION")
+bb1_upper_source = input.source(close, "BB1 Upper", group="📡 MAIN INDICATOR CONNECTION")
+bb1_lower_source = input.source(close, "BB1 Lower", group="📡 MAIN INDICATOR CONNECTION")
+bb2_upper_source = input.source(close, "BB2 Upper", group="📡 MAIN INDICATOR CONNECTION")
+bb2_lower_source = input.source(close, "BB2 Lower", group="📡 MAIN INDICATOR CONNECTION")
+
+// ================================
+// 🧪 RESEARCH SETTINGS
+// ================================
+
+enable_normal_strategy = input.bool(true, "Enable Normal Strategy Tracking", group="🧪 RESEARCH STRATEGY")
+enable_inverse_strategy = input.bool(true, "Enable Inverse Strategy Tracking", group="🧪 RESEARCH STRATEGY")
+fibonacci_level = input.float(1.0, "Fibonacci Level for Inverse", minval=0.1, maxval=3.0, step=0.1, group="🧪 RESEARCH STRATEGY")
+inverse_rsi_threshold_bull = input.float(65.0, "RSI Threshold for Inverse Bullish", minval=50.0, maxval=90.0, step=1.0, group="🧪 RESEARCH STRATEGY")
+inverse_rsi_threshold_bear = input.float(35.0, "RSI Threshold for Inverse Bearish", minval=10.0, maxval=50.0, step=1.0, group="🧪 RESEARCH STRATEGY")
+
+tracking_period = input.int(50, "Tracking Period (Bars)", minval=20, maxval=200, group="🔧 TRACKING SETTINGS")
+minimum_target_distance = input.float(1.0, "Minimum Target Distance %", minval=0.5, maxval=5.0, step=0.1, group="🔧 TRACKING SETTINGS")
+maximum_signals = input.int(100, "Maximum Signals to Track", minval=20, maxval=200, group="🔧 TRACKING SETTINGS")
+
+// ================================
+// 📊 DISPLAY SETTINGS
+// ================================
+
+show_research_table = input.bool(true, "Show Research Table", group="📊 DISPLAY SETTINGS")
+show_signals_on_chart = input.bool(true, "Show Signals on Chart", group="📊 DISPLAY SETTINGS")
+table_position = input.string("Top Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="📊 DISPLAY SETTINGS")
+
+// ================================
+// 📦 DATA STRUCTURES
+// ================================
+
+// Strategy signal data
+type StrategySignal
+    int id
+    string strategy_type
+    string signal_type
+    float entry_price
+    float target_price
+    float anchor_price
+    float entry_rsi
+    int entry_bar
+    bool target_hit
+    bool stop_hit
+    bool completed
+    float final_pnl
+    int duration
+    string completion_reason
+
+// Strategy storage
+var array<StrategySignal> normal_signals = array.new<StrategySignal>()
+var array<StrategySignal> inverse_signals = array.new<StrategySignal>()
+var int signal_counter = 0
+
+// ================================
+// 🎯 FIBONACCI INVERSE CALCULATIONS
+// ================================
+
+// Calculate normal strategy target
+calculate_normal_target(is_bullish_signal) =>
+    target = is_bullish_signal ? bb1_upper_source : bb1_lower_source
+    target
+
+// Calculate Fibonacci inverse target
+calculate_fibonacci_inverse_target(is_bullish_signal, anchor_point, normal_target) =>
+    expected_distance = math.abs(normal_target - anchor_point)
+    
+    if is_bullish_signal
+        // Bullish signal → Play BEARISH (inverse)
+        // Project downward from anchor
+        inverse_target = anchor_point - (expected_distance * fibonacci_level)
+    else
+        // Bearish signal → Play BULLISH (inverse)  
+        // Project upward from anchor
+        inverse_target = anchor_point + (expected_distance * fibonacci_level)
+    
+    inverse_target
+
+// Get anchor point for divergence
+get_anchor_point(is_bullish_signal) =>
+    anchor = is_bullish_signal ? low : high
+    anchor
+
+// ================================
+// 🔍 SIGNAL DETECTION
+// ================================
+
+// Detect new divergence signals
+new_bullish_regular = bullish_regular_source > 0 and bullish_regular_source[1] == 0
+new_bearish_regular = bearish_regular_source > 0 and bearish_regular_source[1] == 0
+
+current_rsi = rsi_source
+
+// Check RSI conditions for inverse strategy
+inverse_bullish_condition = new_bullish_regular and current_rsi >= inverse_rsi_threshold_bull
+inverse_bearish_condition = new_bearish_regular and current_rsi <= inverse_rsi_threshold_bear
+
+// ================================
+// 📈 SIGNAL MANAGEMENT
+// ================================
+
+// Create strategy signal
+create_signal(strategy_type, signal_type, is_bullish_signal, target_price, anchor_price) =>
+    if array.size(normal_signals) + array.size(inverse_signals) < maximum_signals
+        signal_counter += 1
+        
+        new_signal = StrategySignal.new(
+            id = signal_counter,
+            strategy_type = strategy_type,
+            signal_type = signal_type,
+            entry_price = close,
+            target_price = target_price,
+            anchor_price = anchor_price,
+            entry_rsi = current_rsi,
+            entry_bar = bar_index,
+            target_hit = false,
+            stop_hit = false,
+            completed = false,
+            final_pnl = 0.0,
+            duration = 0,
+            completion_reason = ""
+        )
+        
+        if strategy_type == "Normal"
+            array.push(normal_signals, new_signal)
+        else
+            array.push(inverse_signals, new_signal)
+
+// Update signal progress
+update_signal_progress(signal, strategy_array, array_index) =>
+    is_inverse_strategy = signal.strategy_type == "Inverse"
+    is_bullish_signal = str.contains(signal.signal_type, "Bullish")
+    
+    // Calculate current P&L based on strategy type
+    current_pnl = 0.0
+    
+    if is_inverse_strategy
+        // Inverse strategy: opposite direction
+        if is_bullish_signal
+            // Bullish signal but playing bearish (inverse)
+            current_pnl := (signal.entry_price - close) / signal.entry_price * 100
+        else
+            // Bearish signal but playing bullish (inverse)
+            current_pnl := (close - signal.entry_price) / signal.entry_price * 100
+    else
+        // Normal strategy: follow signal direction
+        if is_bullish_signal
+            current_pnl := (close - signal.entry_price) / signal.entry_price * 100
+        else
+            current_pnl := (signal.entry_price - close) / signal.entry_price * 100
+    
+    // Check if target hit
+    target_reached = false
+    
+    if is_inverse_strategy
+        if is_bullish_signal
+            // Inverse bullish: target below
+            target_reached := close <= signal.target_price
+        else
+            // Inverse bearish: target above
+            target_reached := close >= signal.target_price
+    else
+        if is_bullish_signal
+            // Normal bullish: target above
+            target_reached := close >= signal.target_price
+        else
+            // Normal bearish: target below
+            target_reached := close <= signal.target_price
+    
+    // Update signal
+    signal.duration := bar_index - signal.entry_bar
+    
+    // Check completion conditions
+    signal_completed = false
+    completion_reason = ""
+    
+    if target_reached and not signal.target_hit
+        signal.target_hit := true
+        signal_completed := true
+        completion_reason := "Target Hit"
+    
+    // Timeout check
+    if signal.duration >= tracking_period and not signal.completed
+        signal_completed := true
+        completion_reason := "Timeout"
+    
+    // Stop loss check (simple: opposite direction move beyond reasonable distance)
+    stop_distance = 3.0 // 3% stop loss
+    stop_reached = false
+    
+    if is_inverse_strategy
+        if is_bullish_signal
+            stop_reached := current_pnl <= -stop_distance
+        else
+            stop_reached := current_pnl <= -stop_distance
+    else
+        if is_bullish_signal
+            stop_reached := current_pnl <= -stop_distance
+        else
+            stop_reached := current_pnl <= -stop_distance
+    
+    if stop_reached and not signal.stop_hit
+        signal.stop_hit := true
+        signal_completed := true
+        completion_reason := "Stop Loss"
+    
+    // Complete signal if needed
+    if signal_completed and not signal.completed
+        signal.completed := true
+        signal.final_pnl := current_pnl
+        signal.completion_reason := completion_reason
+
+// Update all active signals
+update_signals() =>
+    // Update normal strategy signals
+    for i = 0 to array.size(normal_signals) - 1
+        signal = array.get(normal_signals, i)
+        if not signal.completed
+            update_signal_progress(signal, normal_signals, i)
+    
+    // Update inverse strategy signals
+    for i = 0 to array.size(inverse_signals) - 1
+        signal = array.get(inverse_signals, i)
+        if not signal.completed
+            update_signal_progress(signal, inverse_signals, i)
+
+// ================================
+// 📊 PERFORMANCE ANALYSIS
+// ================================
+
+calculate_strategy_performance(signals_array) =>
+    total_signals = 0
+    completed_signals = 0
+    winning_signals = 0
+    total_pnl = 0.0
+    best_trade = 0.0
+    worst_trade = 0.0
+    
+    for i = 0 to array.size(signals_array) - 1
+        signal = array.get(signals_array, i)
+        total_signals += 1
+        
+        if signal.completed
+            completed_signals += 1
+            total_pnl += signal.final_pnl
+            
+            if signal.final_pnl > 0
+                winning_signals += 1
+            
+            if signal.final_pnl > best_trade
+                best_trade := signal.final_pnl
+            
+            if signal.final_pnl < worst_trade
+                worst_trade := signal.final_pnl
+    
+    win_rate = completed_signals > 0 ? winning_signals / completed_signals * 100 : 0
+    avg_pnl = completed_signals > 0 ? total_pnl / completed_signals : 0
+    
+    [total_signals, completed_signals, win_rate, avg_pnl, best_trade, worst_trade]
+
+// ================================
+// 🔄 MAIN EXECUTION
+// ================================
+
+// Process new signals
+if new_bullish_regular and enable_normal_strategy
+    anchor = get_anchor_point(true)
+    target = calculate_normal_target(true)
+    if math.abs(target - close) / close * 100 >= minimum_target_distance
+        create_signal("Normal", "Bullish Regular", true, target, anchor)
+
+if new_bearish_regular and enable_normal_strategy
+    anchor = get_anchor_point(false)
+    target = calculate_normal_target(false)
+    if math.abs(target - close) / close * 100 >= minimum_target_distance
+        create_signal("Normal", "Bearish Regular", false, target, anchor)
+
+// Inverse strategy signals (with RSI conditions)
+if inverse_bullish_condition and enable_inverse_strategy
+    anchor = get_anchor_point(true)
+    normal_target = calculate_normal_target(true)
+    inverse_target = calculate_fibonacci_inverse_target(true, anchor, normal_target)
+    if math.abs(inverse_target - close) / close * 100 >= minimum_target_distance
+        create_signal("Inverse", "Bullish Regular", true, inverse_target, anchor)
+
+if inverse_bearish_condition and enable_inverse_strategy
+    anchor = get_anchor_point(false)
+    normal_target = calculate_normal_target(false)
+    inverse_target = calculate_fibonacci_inverse_target(false, anchor, normal_target)
+    if math.abs(inverse_target - close) / close * 100 >= minimum_target_distance
+        create_signal("Inverse", "Bearish Regular", false, inverse_target, anchor)
+
+// Update all signals
+update_signals()
+
+// Calculate performance
+[normal_total, normal_completed, normal_win_rate, normal_avg_pnl, normal_best, normal_worst] = calculate_strategy_performance(normal_signals)
+[inverse_total, inverse_completed, inverse_win_rate, inverse_avg_pnl, inverse_best, inverse_worst] = calculate_strategy_performance(inverse_signals)
+
+// Calculate advantage
+win_rate_advantage = inverse_win_rate - normal_win_rate
+pnl_advantage = inverse_avg_pnl - normal_avg_pnl
+
+// ================================
+// 📊 RESEARCH TABLE
+// ================================
+
+get_table_position() =>
+    switch table_position
+        "Top Left" => position.top_left
+        "Top Right" => position.top_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Right" => position.bottom_right
+        => position.top_right
+
+var table research_table = na
+if barstate.islast and show_research_table
+    table.delete(research_table)
+    research_table := table.new(get_table_position(), 3, 18, bgcolor=color.new(color.black, 85), border_width=1)
+    
+    // Header
+    table.cell(research_table, 0, 0, "🔬 FIBONACCI INVERSE RESEARCH", text_color=color.white, text_size=size.small, bgcolor=color.new(color.purple, 60))
+    table.cell(research_table, 1, 0, "NORMAL", text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 60))
+    table.cell(research_table, 2, 0, "INVERSE", text_color=color.white, text_size=size.small, bgcolor=color.new(color.orange, 60))
+    
+    // Total signals
+    table.cell(research_table, 0, 1, "Total Signals", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 1, str.tostring(normal_total), text_color=color.aqua, text_size=size.tiny)
+    table.cell(research_table, 2, 1, str.tostring(inverse_total), text_color=color.aqua, text_size=size.tiny)
+    
+    // Completed signals
+    table.cell(research_table, 0, 2, "Completed", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 2, str.tostring(normal_completed), text_color=color.yellow, text_size=size.tiny)
+    table.cell(research_table, 2, 2, str.tostring(inverse_completed), text_color=color.yellow, text_size=size.tiny)
+    
+    // Win rates
+    table.cell(research_table, 0, 3, "Win Rate", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 3, str.tostring(normal_win_rate, "#.1") + "%", 
+               text_color=normal_win_rate >= 50 ? color.green : color.red, text_size=size.tiny)
+    table.cell(research_table, 2, 3, str.tostring(inverse_win_rate, "#.1") + "%", 
+               text_color=inverse_win_rate >= 50 ? color.green : color.red, text_size=size.tiny)
+    
+    // Average PnL
+    table.cell(research_table, 0, 4, "Avg PnL %", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 4, str.tostring(normal_avg_pnl, "#.2") + "%", 
+               text_color=normal_avg_pnl > 0 ? color.green : color.red, text_size=size.tiny)
+    table.cell(research_table, 2, 4, str.tostring(inverse_avg_pnl, "#.2") + "%", 
+               text_color=inverse_avg_pnl > 0 ? color.green : color.red, text_size=size.tiny)
+    
+    // Best trade
+    table.cell(research_table, 0, 5, "Best Trade", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 5, "+" + str.tostring(normal_best, "#.2") + "%", text_color=color.green, text_size=size.tiny)
+    table.cell(research_table, 2, 5, "+" + str.tostring(inverse_best, "#.2") + "%", text_color=color.green, text_size=size.tiny)
+    
+    // Worst trade
+    table.cell(research_table, 0, 6, "Worst Trade", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 6, str.tostring(normal_worst, "#.2") + "%", text_color=color.red, text_size=size.tiny)
+    table.cell(research_table, 2, 6, str.tostring(inverse_worst, "#.2") + "%", text_color=color.red, text_size=size.tiny)
+    
+    // Separator
+    table.cell(research_table, 0, 7, "────────────────────────────", text_color=color.gray, text_size=size.tiny)
+    table.cell(research_table, 1, 7, "────────────", text_color=color.gray, text_size=size.tiny)
+    table.cell(research_table, 2, 7, "────────────", text_color=color.gray, text_size=size.tiny)
+    
+    // Research conclusion
+    table.cell(research_table, 0, 8, "🎯 RESEARCH CONCLUSION", text_color=color.yellow, text_size=size.tiny)
+    
+    // Win rate advantage
+    table.cell(research_table, 0, 9, "Win Rate Advantage", text_color=color.white, text_size=size.tiny)
+    advantage_text = (win_rate_advantage > 0 ? "+" : "") + str.tostring(win_rate_advantage, "#.1") + "%"
+    table.cell(research_table, 1, 9, advantage_text, 
+               text_color=win_rate_advantage > 0 ? color.green : color.red, text_size=size.tiny)
+    
+    // PnL advantage
+    table.cell(research_table, 0, 10, "PnL Advantage", text_color=color.white, text_size=size.tiny)
+    pnl_adv_text = (pnl_advantage > 0 ? "+" : "") + str.tostring(pnl_advantage, "#.2") + "%"
+    table.cell(research_table, 1, 10, pnl_adv_text, 
+               text_color=pnl_advantage > 0 ? color.green : color.red, text_size=size.tiny)
+    
+    // Overall assessment
+    table.cell(research_table, 0, 11, "Overall Assessment", text_color=color.white, text_size=size.tiny)
+    assessment = win_rate_advantage > 10 ? "✅ SUPERIOR" : 
+                 win_rate_advantage > 5 ? "✅ BETTER" : 
+                 win_rate_advantage > 0 ? "🔄 SLIGHT EDGE" : 
+                 win_rate_advantage > -5 ? "⚖️ SIMILAR" : "❌ WORSE"
+    assessment_color = win_rate_advantage > 5 ? color.green : 
+                       win_rate_advantage > 0 ? color.yellow : 
+                       win_rate_advantage > -5 ? color.orange : color.red
+    table.cell(research_table, 1, 11, assessment, text_color=assessment_color, text_size=size.tiny)
+    
+    // Sample size
+    total_completed = normal_completed + inverse_completed
+    table.cell(research_table, 0, 12, "Sample Size", text_color=color.white, text_size=size.tiny)
+    sample_assessment = total_completed >= 50 ? "SIGNIFICANT" : 
+                       total_completed >= 20 ? "MODERATE" : "SMALL"
+    sample_color = total_completed >= 50 ? color.green : 
+                   total_completed >= 20 ? color.yellow : color.red
+    table.cell(research_table, 1, 12, str.tostring(total_completed), text_color=sample_color, text_size=size.tiny)
+    table.cell(research_table, 2, 12, sample_assessment, text_color=sample_color, text_size=size.tiny)
+    
+    // Research settings
+    table.cell(research_table, 0, 13, "───── SETTINGS ─────", text_color=color.gray, text_size=size.tiny)
+    
+    table.cell(research_table, 0, 14, "Fibonacci Level", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 14, str.tostring(fibonacci_level), text_color=color.silver, text_size=size.tiny)
+    
+    table.cell(research_table, 0, 15, "RSI Bull Threshold", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 15, str.tostring(inverse_rsi_threshold_bull), text_color=color.silver, text_size=size.tiny)
+    
+    table.cell(research_table, 0, 16, "RSI Bear Threshold", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 16, str.tostring(inverse_rsi_threshold_bear), text_color=color.silver, text_size=size.tiny)
+    
+    table.cell(research_table, 0, 17, "Tracking Period", text_color=color.white, text_size=size.tiny)
+    table.cell(research_table, 1, 17, str.tostring(tracking_period) + " bars", text_color=color.silver, text_size=size.tiny)
+
+// ================================
+// 📈 PLOTS
+// ================================
+
+// Performance comparison plots
+plot(normal_win_rate, title="Normal Win Rate", color=color.blue, linewidth=2)
+plot(inverse_win_rate, title="Inverse Win Rate", color=color.orange, linewidth=2)
+plot(win_rate_advantage, title="Win Rate Advantage", color=color.purple, linewidth=1)
+
+// Signal markers (με conditions)
+new_inverse_bull = enable_inverse_strategy and (bullish_regular_source > 0 and bullish_regular_source[1] == 0) and rsi_source >= inverse_rsi_threshold_bull
+new_inverse_bear = enable_inverse_strategy and (bearish_regular_source > 0 and bearish_regular_source[1] == 0) and rsi_source <= inverse_rsi_threshold_bear
+
+plotshape(new_inverse_bull and show_signals_on_chart, title="Inverse Bullish Signal", style=shape.triangledown, location=location.top, color=color.yellow, size=size.small)
+plotshape(new_inverse_bear and show_signals_on_chart, title="Inverse Bearish Signal", style=shape.triangleup, location=location.bottom, color=color.yellow, size=size.small)
+
+// Reference lines
+hline(0, "Zero Line", color=color.gray, linestyle=hline.style_dashed)
+hline(50, "50% Win Rate", color=color.yellow, linestyle=hline.style_dotted)
+
+// ================================
+// 🚨 RESEARCH ALERTS
+// ================================
+
+// Statistical significance alert
+alertcondition(normal_completed + inverse_completed >= 50 and normal_completed >= 10 and inverse_completed >= 10, 
+               title="Statistical Significance Reached", 
+               message="📊 Statistical significance reached! Normal: " + str.tostring(normal_completed) + " | Inverse: " + str.tostring(inverse_completed))
+
+// Advantage alerts
+alertcondition(win_rate_advantage >= 15 and inverse_completed >= 10, 
+               title="Strong Inverse Advantage", 
+               message="🎯 Strong inverse advantage detected! Advantage: +" + str.tostring(win_rate_advantage, "#.1") + "%")
+
+alertcondition(win_rate_advantage <= -15 and inverse_completed >= 10, 
+               title="Inverse Strategy Underperforming", 
+               message="⚠️ Inverse strategy underperforming! Disadvantage: " + str.tostring(win_rate_advantage, "#.1") + "%")
+
+// New signal alerts
+alertcondition(new_inverse_bull, title="New Inverse Bullish Signal", 
+               message="🔄 New inverse signal: Bullish divergence → Playing BEARISH | RSI: " + str.tostring(current_rsi, "#.1"))
+
+alertcondition(new_inverse_bear, title="New Inverse Bearish Signal", 
+               message="🔄 New inverse signal: Bearish divergence → Playing BULLISH | RSI: " + str.tostring(current_rsi, "#.1"))
+
+// Research milestone alerts
+alertcondition(inverse_total == 25, title="Research Milestone: 25 Inverse Signals", 
+               message="🏁 Research milestone reached: 25 inverse signals tracked!")
+
+alertcondition(inverse_total == 50, title="Research Milestone: 50 Inverse Signals", 
+               message="🏁 Major milestone: 50 inverse signals! Time for comprehensive analysis.")
